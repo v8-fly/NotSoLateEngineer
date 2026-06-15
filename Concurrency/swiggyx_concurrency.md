@@ -1,24 +1,27 @@
 # SwiggyX — Concurrency, Threads & Async
+
 ### A living document. Updated concept by concept.
+
 > Built on top of: Stack, Heap, Stack Frames, Processes, IO vs CPU.
 > Never re-explained. Always built forward.
 
 ---
 
 ## The App We Are Building
+
 **SwiggyX** — A Food Delivery Backend in Java.
 
 Every concept we learn maps directly to a real feature:
 
-| Feature | Concept |
-|---|---|
-| 1000 orders coming in simultaneously | Thread Pool |
-| Two users ordering the last item | Race Condition + Mutex |
-| Waiting for restaurant to confirm | Async / Futures |
-| Max 20 DB connections at a time | Semaphore |
-| Payment + Inventory updating together | Deadlock Prevention |
-| Background ML recommendation engine | Threads vs Async |
-| Real-time order tracking | Event Loop (Node.js) |
+| Feature                               | Concept                |
+| ------------------------------------- | ---------------------- |
+| 1000 orders coming in simultaneously  | Thread Pool            |
+| Two users ordering the last item      | Race Condition + Mutex |
+| Waiting for restaurant to confirm     | Async / Futures        |
+| Max 20 DB connections at a time       | Semaphore              |
+| Payment + Inventory updating together | Deadlock Prevention    |
+| Background ML recommendation engine   | Threads vs Async       |
+| Real-time order tracking              | Event Loop (Node.js)   |
 
 ---
 
@@ -29,6 +32,7 @@ Every concept we learn maps directly to a real feature:
 ### Concept 1 — Why Concurrency Exists
 
 #### The Problem
+
 A sequential server handles requests one by one.
 
 ```
@@ -41,7 +45,9 @@ User 10,000 waits: 800ms × 10,000 = 8000 seconds
 **User 10,000 gets their response in 2.2 hours.**
 
 #### Why IO Makes It Worse
+
 CPU speed vs IO speed:
+
 ```
 CPU operation:              ~0.3 nanoseconds
 RAM access:                 ~100 nanoseconds
@@ -54,10 +60,12 @@ During a 5ms DB call — CPU could have done **15 million operations.**
 It just sat there. Idle. Wasted.
 
 #### The Core Insight
+
 > While User 1's DB query travels through the network — handle User 2. And User 3. And User 4.
 > **Concurrency is about not wasting idle CPU time.**
 
 #### SwiggyX at 8PM
+
 ```
 User 1 places order      →  DB write        (IO — waiting)
 User 2 checks menu       →  DB read         (IO — waiting)
@@ -78,11 +86,13 @@ CPU tasks → need real parallel power. Different solution (covered later).
 ### Concept 2 — Process vs Thread
 
 #### Mental Model
+
 > A **process** is a building.
 > **Threads** are workers inside that building.
 > Shared office (heap). Own desk (stack).
 
 #### Memory Layout — Single Thread
+
 ```
 Process Memory
 ┌─────────────────────────┐
@@ -99,6 +109,7 @@ Process Memory
 ```
 
 #### Memory Layout — Multiple Threads
+
 ```
 Process Memory (SwiggyX Server)
 ┌─────────────────────────────────────────┐
@@ -120,6 +131,7 @@ Process Memory (SwiggyX Server)
 ```
 
 #### Shared Heap — What It Actually Means
+
 ```
 Thread 1 Stack          HEAP                Thread 2 Stack
 ┌──────────┐      ┌──────────────┐         ┌──────────┐
@@ -128,10 +140,12 @@ Thread 1 Stack          HEAP                Thread 2 Stack
 └──────────┘      │ amount: 450  │         └──────────┘
                   └──────────────┘
 ```
+
 Thread 1 changes `status` to CONFIRMED → Thread 2 immediately sees it.
 No copying. No messaging. **Direct shared memory.**
 
 #### Own Stack — What It Actually Means
+
 ```
 Thread 1 Stack                    Thread 2 Stack
 ┌─────────────────────┐          ┌─────────────────────┐
@@ -143,12 +157,15 @@ Thread 1 Stack                    Thread 2 Stack
 │  isValid = true     │          │  menuId = "R55"      │
 └─────────────────────┘          └─────────────────────┘
 ```
+
 Same function. Completely separate stack frames.
 `userId` in Thread 1 is **not the same variable** as `userId` in Thread 2.
 
 #### Why Each Thread Needs Its Own Stack
+
 Each thread is an independent flow of execution.
 If they shared one stack:
+
 ```
 SHARED STACK (broken)
 ┌─────────────────────────┐
@@ -157,10 +174,12 @@ SHARED STACK (broken)
 │   orderId = "ORDER_202" │  ← Thread 2 overwrote it
 └─────────────────────────┘
 ```
+
 Thread 1 reads orderId → gets "ORDER_202". Wrong order. Wrong user.
 **Independent flow = independent stack. No choice.**
 
 #### Stack Memory Cost
+
 ```
 Default stack size in Java: ~512KB to 1MB per thread
 
@@ -170,6 +189,7 @@ Default stack size in Java: ~512KB to 1MB per thread
 ```
 
 #### Code — Creating Threads in Java
+
 ```java
 public class SwiggyX {
 
@@ -196,6 +216,7 @@ Run this multiple times — output order changes every time.
 **OS decides order. Not you.**
 
 #### Key Facts
+
 - CODE, DATA, HEAP → shared by all threads
 - STACK → each thread owns its own
 - Static variables → DATA segment (also shared, same danger as heap)
@@ -207,21 +228,25 @@ Run this multiple times — output order changes every time.
 ### Concept 3 — Context Switching
 
 #### The Problem
+
 ```
 CPU Cores:   8
 Threads:     200
 ```
+
 200 threads. 8 cores. Only 8 can physically run at once.
 OS runs each thread for a tiny slice → pauses it → runs next.
 This is a **context switch.**
 
 #### Mental Model
+
 > You're a chef mid-burger. Manager says switch to pasta.
 > You **bookmark** everything — step, ingredients, temperature.
 > Go to pasta. Come back. Resume burger **exactly** where you left off.
 > That bookmark = context switch.
 
 #### CPU Registers
+
 ```
 CPU Registers (inside the chip, ultra fast)
 ┌─────────────────────────────────────────┐
@@ -232,6 +257,7 @@ CPU Registers (inside the chip, ultra fast)
 ```
 
 #### What Actually Gets Saved
+
 ```
 OS Memory — Thread Control Blocks
 ┌─────────────────────────────────────────────────┐
@@ -256,6 +282,7 @@ OS Memory — Thread Control Blocks
 ```
 
 #### Context Switch Steps
+
 ```
 Thread 1 running on Core 1
 OS says: "Time's up"
@@ -266,12 +293,14 @@ Step 3 → Thread 2 now RUNNING — exactly where it left off
 ```
 
 #### Connection to Stack Frames
+
 SP (Stack Pointer) points to the top of the current stack frame.
 When OS saves Thread 1's SP → it saves exactly where Thread 1 was in its call chain.
 When it restores that SP → Thread 1 wakes up inside the same function, same local variables intact.
 **Stack frames survive context switches because SP is saved.**
 
 #### Thread States
+
 ```
 RUNNING  →  currently on CPU
 READY    →  waiting for a free core, could run right now
@@ -279,17 +308,20 @@ WAITING  →  blocked on IO (DB call, network) — OS never gives it CPU
 ```
 
 #### Cost of Context Switching
+
 ```
 1. Save current thread's registers      → time
 2. Load next thread's registers         → time
 3. CPU cache partially invalidated      → expensive (Thread 2's data not in cache)
 ```
+
 A single context switch: ~1-10 microseconds.
 Too many threads = CPU spends more time switching than doing actual work.
 
 > **More threads ≠ faster. At some point you're just switching, not working.**
 
 #### OS vs CPU — Important Distinction
+
 ```
 OS  →  allocates memory, schedules threads, manages resources
 CPU →  just executes whatever OS puts in front of it
@@ -299,6 +331,7 @@ CPU =  chef (just cooks whatever lands in front of him)
 ```
 
 #### CPU vs Core
+
 ```
 CPU  =  the physical chip on your motherboard
 Core =  the actual execution unit inside that chip
@@ -314,6 +347,7 @@ Your Laptop (example)
 │  └────────┘      └────────┘     │
 └─────────────────────────────────┘
 ```
+
 One core = one thread running at any instant.
 True parallelism is always limited by number of cores.
 
@@ -322,6 +356,7 @@ True parallelism is always limited by number of cores.
 ### Concept 4 — Thread Pool
 
 #### The Problem With Raw Threads
+
 ```
 Each thread needs: ~1MB stack + OS Control Block setup + scheduler registration
 
@@ -334,12 +369,14 @@ Destroying a thread → more overhead
 ```
 
 #### Mental Model
+
 > Fixed kitchen staff. Orders queue. Free chef picks next order.
 >
 > Without pool → hire a chef per order, fire them when done. Insane.
 > With pool → 10 chefs, always there, handle thousands of orders.
 
 #### How Thread Pool Works
+
 ```
 SwiggyX starts up — threads created BEFORE any request arrives:
 
@@ -369,6 +406,7 @@ Thread 1 finishes → picks up 106. Same thread. No creation. No destruction.
 ```
 
 #### Code — Java ExecutorService
+
 ```java
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -406,12 +444,14 @@ public class SwiggyX {
 ```
 
 Output shows same thread handling multiple orders:
+
 ```
 Processing: ORDER_1 | Thread: pool-1-thread-1
 Processing: ORDER_6 | Thread: pool-1-thread-1  ← same thread reused!
 ```
 
 #### Pool Size — Real Engineering Decision
+
 ```
 IO Intensive (DB calls, network):
 → Thread spends most time WAITING
@@ -425,6 +465,7 @@ CPU Intensive (ML model, fraud detection):
 ```
 
 #### SwiggyX Pool Architecture
+
 ```
 SwiggyX at 8PM
 ├── Order Handler Pool    (50 threads) → IO intensive, DB writes
@@ -442,15 +483,18 @@ SwiggyX at 8PM
 ### Concept 5 — Race Conditions
 
 #### The Setup
+
 Two users. Same restaurant. Last Biryani portion.
 Both tap "Order Now" at the exact same second.
 Two threads. Same object on the heap. Both writing simultaneously.
 
 #### Why It Breaks — The 3 CPU Steps
+
 CPU cannot do math directly on heap memory.
 It must: LOAD → MODIFY → STORE.
 
 `inventory = inventory - 1` is actually:
+
 ```
 Step 1 — LOAD:    read inventory from heap → put in register
 Step 2 — MODIFY:  subtract 1 in register
@@ -458,6 +502,7 @@ Step 3 — STORE:   write register value back to heap
 ```
 
 #### The Exact Failure
+
 ```
 HEAP                     Thread 1 (Core 1)       Thread 2 (Core 2)
 ┌─────────────┐
@@ -480,6 +525,7 @@ HEAP                     Thread 1 (Core 1)       Thread 2 (Core 2)
 Both threads confirmed the order. **Two orders placed. Zero portions available.**
 
 #### Why It's Non-Atomic
+
 Those 3 steps — LOAD, MODIFY, STORE — are **not atomic.**
 Atomic = happens completely or not at all. Never halfway.
 OS can context switch between any of these 3 steps.
@@ -487,6 +533,7 @@ OS can context switch between any of these 3 steps.
 > **Result depends entirely on who runs when. Different every time. Impossible to reliably reproduce.**
 
 #### Code — Feeling the Pain
+
 ```java
 public class SwiggyX {
 
@@ -525,6 +572,7 @@ public class SwiggyX {
 ```
 
 Run 5 times. Output changes every run:
+
 ```
 Run 1: Both confirmed. Final: -1  ← broken
 Run 2: User 1 confirmed. User 2 sold out. Final: 0  ← correct
@@ -534,6 +582,7 @@ Run 3: Both confirmed. Final: -1  ← broken again
 **Same code. Different results. No pattern. That's a race condition.**
 
 #### Real SwiggyX Danger
+
 ```
 Wallet balance race condition:
 User has ₹500. Two payments of ₹400 hit simultaneously.
@@ -547,6 +596,7 @@ User paid ₹800 with only ₹500 in wallet.
 Race conditions in payment systems = **real money lost.**
 
 #### Key Insight
+
 > Static variables live in DATA segment — not heap.
 > But DATA segment is also shared by all threads.
 > Race condition happens exactly the same way.
@@ -595,20 +645,24 @@ STORE → inventory = 0    ← overwrites Thread 2's correct result
 ### Concept 6 — Volatile & Memory Visibility
 
 #### The New Problem
+
 Race condition = multiple threads writing simultaneously.
 Memory visibility = one thread writes, another reads — **and still gets the wrong value.**
 Not a race condition. Something deeper. Hidden inside CPU hardware.
 
 #### Why CPU Caches Variables
+
 ```
 CPU operation:   0.3 nanoseconds
 Cache access:    1 nanosecond    (3x slower than CPU)
 RAM access:      100 nanoseconds (300x slower than CPU)
 ```
+
 Each core keeps a local copy of variables it uses frequently.
 Dramatically faster. But creates a problem in multi-threaded code.
 
 #### The Memory Visibility Problem
+
 ```
 ┌─────────────────────────────────────────────────┐
 │                   RAM (Heap)                    │
@@ -641,6 +695,7 @@ Not a race condition — only one thread is writing.
 Pure memory visibility problem.
 
 #### SwiggyX Scenario
+
 ```
 Thread 1 — sets isRestaurantOpen = false (restaurant closed)
            → written to Core 1's cache only
@@ -653,7 +708,9 @@ Thread 2 — while (isRestaurantOpen) { fetchMenu(); }
 ```
 
 #### The Fix — volatile
+
 `volatile` tells the CPU:
+
 > Do NOT cache this variable.
 > Every read must go directly to RAM.
 > Every write must go directly to RAM immediately.
@@ -672,6 +729,7 @@ Thread 2 reads isRestaurantOpen
 ```
 
 #### volatile does NOT fix race conditions
+
 ```java
 // STILL BROKEN even with volatile
 volatile int inventory = 1;
@@ -681,20 +739,23 @@ if (inventory > 0) {     if (inventory > 0) {
     inventory -= 1;          inventory -= 1;
 }                        }
 ```
+
 volatile ensures both threads see the latest value.
 It does NOT make LOAD-MODIFY-STORE atomic.
 Both threads still read 1, both still confirm order.
 
 #### volatile vs synchronized — Critical Difference
-| | Race Condition | Memory Visibility |
-|---|---|---|
+
+|         | Race Condition                          | Memory Visibility                          |
+| ------- | --------------------------------------- | ------------------------------------------ |
 | Problem | Multiple threads writing simultaneously | One thread writes, other reads stale cache |
-| Cause | LOAD-MODIFY-STORE not atomic | CPU core caches variable locally |
-| Fix | synchronized | volatile |
+| Cause   | LOAD-MODIFY-STORE not atomic            | CPU core caches variable locally           |
+| Fix     | synchronized                            | volatile                                   |
 
 > **volatile = visibility. synchronized = atomicity. Different problems. Different tools.**
 
 #### Code
+
 ```java
 public class SwiggyX {
 
@@ -727,10 +788,12 @@ public class SwiggyX {
     }
 }
 ```
+
 Remove `volatile` → menu fetcher may loop forever on some machines.
 Add `volatile` → menu fetcher always stops within one cycle.
 
 #### SwiggyX — What Needs volatile vs synchronized
+
 ```
 volatile (one writer, many readers):
 ├── isRestaurantOpen    ← one thread writes, many threads read
@@ -745,7 +808,7 @@ synchronized (multiple writers):
 
 ---
 
-*Document continues as we learn...*
+_Document continues as we learn..._
 
 ---
 
@@ -764,25 +827,29 @@ volatile           → forces RAM reads/writes, fixes visibility not atomicity
 
 ---
 
-*Last updated: Concept 6 — Volatile & Memory Visibility*
+_Last updated: Concept 6 — Volatile & Memory Visibility_
 
 ---
 
 ### Concept 7 — Mutex & Locks
 
 #### The Problem
+
 LOAD-MODIFY-STORE are 3 separate steps.
 OS can interrupt between any of them.
 Two threads can execute them simultaneously on multi-core.
 We need: **"These 3 steps belong together. No one interrupts. No one enters. Until I'm done."**
 
 #### Mental Model
+
 > Mutex = bathroom key in an office.
 > One key. One person at a time.
 > Pick up key → go in → lock door → done → put key back → next person.
 
 #### Monitor Lock — Built Into Every Object
+
 Every object on the heap has a hidden lock attached to it:
+
 ```
 HEAP
 ┌─────────────────────────────────┐
@@ -794,9 +861,11 @@ HEAP
 │  name = "Biryani House"         │
 └─────────────────────────────────┘
 ```
+
 Every object. Automatically. You don't create it. It's just there.
 
 #### The Critical Section
+
 ```
 ──────────────────────────────────────
   Normal code      ← many threads simultaneously, fine
@@ -815,6 +884,7 @@ Every object. Automatically. You don't create it. It's just there.
 ```
 
 #### How synchronized Works
+
 `synchronized` on a method locks `this` — the object the method is called on.
 
 It is NOT the variables that get locked. It is the DOOR that gets locked.
@@ -837,6 +907,7 @@ Many threads
 ```
 
 #### Code — synchronized method
+
 ```java
 public class Restaurant {
 
@@ -873,9 +944,11 @@ public class SwiggyX {
     }
 }
 ```
+
 Output always correct — one confirms, one gets sold out. Every run.
 
 #### Code — synchronized block (more precise)
+
 ```java
 public boolean placeOrder(String userId) {
 
@@ -893,13 +966,16 @@ public boolean placeOrder(String userId) {
     // lock released here automatically
 }
 ```
+
 > Smaller critical section = less time locked = other threads wait less = better performance.
 
 #### Different Objects — Different Locks
+
 ```java
 Restaurant biryaniHouse = new Restaurant("Biryani House", 1);
 Restaurant pizzaPlace   = new Restaurant("Pizza Place", 5);
 ```
+
 ```
 biryaniHouse → its own lock
 pizzaPlace   → completely separate lock
@@ -910,6 +986,7 @@ Two threads hitting DIFF objects  → both proceed freely
 ```
 
 #### synchronized fixes BOTH race condition scenarios
+
 ```
 MULTI-CORE:
 Thread 1 tries synchronized → gets lock
@@ -926,6 +1003,7 @@ Thread 2 enters → sees correct value
 ```
 
 #### ⚠️ Critical Warning — Lock Only Works If ALL Threads Respect It
+
 ```java
 // Thread 1 — respects the lock
 public synchronized boolean placeOrder(String userId) {
@@ -937,20 +1015,24 @@ public int getInventory() {
     return inventory;  // no synchronized — reads directly
 }
 ```
+
 The variable does not protect itself.
 One thread bypassing synchronized = protection broken.
 Every access — reads AND writes — must go through the lock.
 
 Real world danger:
+
 ```
 Developer A → writes placeOrder()    → adds synchronized ✅
 Developer B → writes getInventory()  → "just a read, safe" ❌
 Developer C → writes updateMenu()    → in a hurry, forgets ❌
 Developer D → writes resetStock()    → new to codebase, does not know ❌
 ```
+
 No compiler error. No runtime warning. Silent bugs at 8PM Friday.
 
 Fix — make it impossible to bypass:
+
 ```java
 public class Restaurant {
     private int inventory = 1;  // private — nobody touches directly
@@ -962,15 +1044,19 @@ public class Restaurant {
 ```
 
 #### ⚠️ How To Know What Needs Protection — The 3 Questions
+
 Ask about every variable:
+
 ```
 1. Is this variable shared across threads?
 2. Is it mutable (can it change)?
 3. Can more than one thread change it?
 ```
+
 All 3 yes → needs synchronized.
 
 Quick signal:
+
 ```
 Field on a class  +  can be written by any thread  =  always protect it
 
@@ -996,6 +1082,7 @@ public void handleOrder() {
 > **Wrong beats slow every time in production.**
 
 #### SwiggyX — All Shared Resources Protected
+
 ```java
 public class SwiggyX {
     private int inventory;
@@ -1018,10 +1105,9 @@ public class SwiggyX {
 }
 ```
 
-
 ---
 
-*Document continues as we learn...*
+_Document continues as we learn..._
 
 ---
 
@@ -1044,7 +1130,7 @@ critical section   → code between lock and unlock → one thread always
 
 ---
 
-*Last updated: Concept 7 — Mutex & Locks*
+_Last updated: Concept 7 — Mutex & Locks_
 
 ---
 
@@ -1069,6 +1155,7 @@ Lock         →  general word for the mechanism
 ```
 
 Real world equivalent:
+
 ```
 Mutex        =  the concept of "one person at a time"
 synchronized =  the bathroom door in Java's building
@@ -1076,6 +1163,7 @@ Lock         =  the act of turning the key
 ```
 
 In Java specifically:
+
 ```
 synchronized              →  simple, built into the language
                              automatic lock/unlock ✅
@@ -1088,12 +1176,12 @@ ReentrantLock             →  advanced mutex in Java
 
 > **Mutex = concept. synchronized = Java's mutex. Lock = what you acquire and release. Same idea, three names.**
 
-
 ---
 
 ### Concept 8 — Semaphores
 
 #### The Problem Mutex Cannot Solve
+
 Mutex = binary. One thread at a time.
 But DB connections are not binary — SwiggyX has 20 of them.
 Mutex would allow only 1 thread to use DB at a time → 49 threads waiting → system crawls.
@@ -1101,12 +1189,14 @@ No protection → 1000 threads → DB crashes.
 Need: **"Allow exactly N threads. Block everyone else."**
 
 #### Mental Model
+
 > Semaphore = parking lot with N spaces.
 > Car arrives → space available → parks → count goes down.
 > Car leaves → space freed → count goes up.
 > Lot full → next car waits at entrance.
 
 #### How It Works
+
 ```
 Semaphore created with count = 20
 
@@ -1122,12 +1212,14 @@ Thread 21 wakes up → enters  → count = 0
 ```
 
 #### Two Types
+
 ```
 Binary Semaphore   → count = 1 → exactly like a mutex
 Counting Semaphore → count = N → allows N threads simultaneously
 ```
 
 #### Code
+
 ```java
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.ExecutorService;
@@ -1163,6 +1255,7 @@ public class SwiggyX {
 ```
 
 #### Semaphore vs Mutex
+
 ```
 Mutex (synchronized)         Semaphore
 ─────────────────────────    ──────────────────────────
@@ -1175,6 +1268,7 @@ wallet deduction             API rate limiting
 ```
 
 #### ⚠️ Semaphore controls headcount. NOT data safety.
+
 Semaphore lets N threads in.
 It does NOT protect shared variables inside.
 You still need synchronized for shared data inside.
@@ -1202,6 +1296,7 @@ public static void handleOrder(String orderId) {
 > **Semaphore controls the headcount. Mutex controls the data. Different jobs. Often needed together.**
 
 #### ⚠️ Always release in finally
+
 ```java
 // WRONG — exception skips release → count never goes up → all threads wait forever
 dbConnectionPool.acquire();
@@ -1218,6 +1313,7 @@ try {
 ```
 
 #### When You Actually Use Semaphore
+
 ```
 Rarely write it yourself in modern Java.
 Frameworks handle it:
@@ -1235,6 +1331,7 @@ You write it directly for:
 > **Understand it deeply to debug frameworks. Write it rarely.**
 
 #### SwiggyX Real Use
+
 ```
 DB connection pool      → Semaphore(20)   max 20 DB connections
 Payment gateway calls   → Semaphore(10)   payment provider limit
@@ -1242,12 +1339,12 @@ Restaurant API calls    → Semaphore(5)    per restaurant limit
 SMS notifications       → Semaphore(100)  SMS provider limit
 ```
 
-
 ---
 
 ### Concept 9 — Deadlock
 
 #### The Problem
+
 Locks protect data. But locks can trap each other.
 
 ```
@@ -1259,11 +1356,13 @@ No error. No exception. No crash log. Just silence.
 ```
 
 #### Mental Model
+
 > Two people. One narrow bridge. Each at one end.
 > Each waiting for the other to back up.
 > Neither backs up. Nobody crosses. Ever.
 
 #### The Exact Failure
+
 ```
 Thread 1                            Thread 2
 ────────────────────────────────────────────────
@@ -1278,6 +1377,7 @@ Circular dependency. No exit.
 ```
 
 #### Memory Picture
+
 ```
 HEAP
 ┌─────────────────────────────────────────────────┐
@@ -1290,6 +1390,7 @@ HEAP
 ```
 
 #### The Four Conditions — ALL must be true for deadlock
+
 ```
 1. MUTUAL EXCLUSION  → locks exist, one thread holds resource exclusively
                        can't remove this — it's the whole point of mutex
@@ -1304,9 +1405,11 @@ HEAP
                        Thread 2 waits for Thread 1
                        a cycle of waiting
 ```
+
 Remove ANY one condition → deadlock impossible.
 
 #### Code — The Deadlock
+
 ```java
 public class SwiggyX {
 
@@ -1337,6 +1440,7 @@ public class SwiggyX {
 ```
 
 #### Fix — Lock Ordering
+
 > **Always acquire locks in the same order. Every thread. No exceptions.**
 
 ```java
@@ -1350,6 +1454,7 @@ Thread 2: paymentLock → inventoryLock  ← same = Thread 2 waits at first lock
 ```
 
 Fixed code:
+
 ```java
 // Both threads — always payment first, inventory second
 public void processOrder(String userId) {
@@ -1370,6 +1475,7 @@ No circular wait. No deadlock. Ever.
 ```
 
 #### Deadlock vs Starvation
+
 ```
 Deadlock     → everyone stuck. nobody moves. circular wait.
 Starvation   → system moving. one thread never gets its turn.
@@ -1379,6 +1485,7 @@ Starvation:  Thread 1 runs, Thread 2 runs... Thread 4 never runs
 ```
 
 #### SwiggyX Real Scenarios
+
 ```
 Payment + Inventory   → always acquire paymentLock before inventoryLock
 Cart item swap        → always acquire locks in order of item ID
@@ -1387,22 +1494,24 @@ Driver + Order assign → always acquire orderLock before driverLock
 One rule: Decide global lock order. Document it. Enforce it everywhere.
 ```
 
-
 ---
 
 ### Concept 10 — Starvation
 
 #### The Problem
+
 Deadlock = everyone stuck. Nothing moves.
 Starvation = system working perfectly. One thread just never gets its turn.
 Not a circular dependency. Just unfairness.
 
 #### Mental Model
+
 > Busy restaurant kitchen. Orders keep coming. Chefs keep cooking.
 > Table 7's order keeps getting skipped — not blocked, just always deprioritized.
 > Food never arrives. That's starvation.
 
 #### Cause 1 — Thread Priority
+
 ```
 Priority levels in Java: 1 (lowest) to 10 (highest). Default: 5.
 
@@ -1416,6 +1525,7 @@ Background sync: waiting... waiting... waiting... never runs
 ```
 
 #### Cause 2 — Unfair Locking
+
 Java's default synchronized gives no ordering guarantee.
 Threads waiting for a lock can be skipped randomly — forever.
 
@@ -1426,6 +1536,7 @@ Thread 4: still waiting. Never wins. Not deadlock — others ARE progressing.
 ```
 
 #### Deadlock vs Starvation
+
 ```
 DEADLOCK                          STARVATION
 ─────────────────────────────     ─────────────────────────────
@@ -1437,6 +1548,7 @@ Fix: consistent lock ordering     Fix: fair locks, priority aging
 ```
 
 #### Fix 1 — ReentrantLock (fair = true)
+
 First thread to wait → first thread to get the lock. Strict FIFO. No thread skipped.
 
 ```java
@@ -1472,16 +1584,20 @@ fair = false → User_3 → User_1 → User_3 → User_5 → User_2 (random, unf
 ```
 
 #### Fix 2 — Priority Aging
+
 Longer a thread waits → priority automatically increases.
+
 ```
 Background thread starts at priority 2
 Waits 5s  → bumped to 3
 Waits 10s → bumped to 5
 Waits 20s → bumped to 8 → finally gets CPU → runs → resets to 2
 ```
+
 OS handles this automatically in most modern systems.
 
 #### Fix 3 — Avoid Extreme Priority Differences
+
 ```java
 // Bad — background may never run under load
 premiumThread.setPriority(10);
@@ -1493,6 +1609,7 @@ backgroundThread.setPriority(4);
 ```
 
 #### Phase 3 — Complete Picture
+
 ```
 Race Condition    → two threads, same data, simultaneously
                    Fix: synchronized
@@ -1507,7 +1624,6 @@ Starvation        → one thread never gets CPU
                    Fix: ReentrantLock(fair=true), priority aging
 ```
 
-
 ---
 
 ## PHASE 4 — ASYNC / AWAIT
@@ -1517,11 +1633,13 @@ Starvation        → one thread never gets CPU
 ### Concept 11 — The IO Problem
 
 #### The Problem
+
 Threads are expensive — 1MB stack each.
 IO is slow — thread spends 99% of time in WAITING state doing nothing.
 At scale this becomes catastrophic.
 
 #### Time Breakdown — One Order
+
 ```
 validateOrder      →   1ms  (CPU working)
 saveToDatabase     →  20ms  (thread WAITING — doing nothing)
@@ -1535,6 +1653,7 @@ Thread waiting:      115ms  ← 99% of the time doing NOTHING
 ```
 
 #### At Scale — The Memory Crisis
+
 ```
 10,000 requests
 Each needs a thread
@@ -1553,6 +1672,7 @@ Server runs out of memory. New requests fail. Users see errors.
 ```
 
 #### Memory Picture
+
 ```
 ┌─────────────────────────────────────────────────────┐
 │  Thread 1 Stack  (1MB) — WAITING for DB response   │
@@ -1570,6 +1690,7 @@ Server runs out of memory. New requests fail. Users see errors.
 ```
 
 #### The Core Insight
+
 > **The thread is not the unit of waiting. The IO operation is.**
 
 Thread is expensive — 1MB stack, OS scheduling, context switching.
@@ -1579,6 +1700,7 @@ Why does an expensive thread babysit a network packet?
 It doesn't have to.
 
 #### Threads vs Async — Side by Side
+
 ```
 THREADS (traditional)
 Thread 1  ──[work]──[waiting............]──[work]──
@@ -1596,6 +1718,7 @@ Same thread handles 100s of requests. Tiny RAM.
 ```
 
 #### Connection to Stack Frames
+
 ```
 Traditional threads:
 handleOrder() stack frame sits alive for 116ms
@@ -1612,6 +1735,7 @@ IO completes → SIGNALS the system → free thread RESUMES the frame
 > You bookmark it, close it, come back later.
 
 #### The Numbers
+
 ```
 Traditional threads:
 10,000 requests → 10,000 threads → 10GB RAM → server struggles
@@ -1624,17 +1748,19 @@ Node.js handles millions of concurrent connections with ONE thread.
 Not magic. Just never lets a thread sit idle waiting for IO.
 
 #### The Signal Mechanism
+
 IO finishes → signals the system → free thread resumes where it left off.
 This signal mechanism is what Promises, Futures, and Async/Await are built on.
-
 
 ---
 
 ### Concept 12 — Promises & Futures
 
 #### The Problem
+
 Thread sends IO request → goes back to pool → IO completes 20ms later.
 But how does the system know:
+
 - Which request this response belongs to?
 - What to do next with this response?
 - Which thread should pick it up?
@@ -1642,12 +1768,14 @@ But how does the system know:
 We need a **placeholder object.** That's a Future (Java) / Promise (JavaScript).
 
 #### Mental Model
+
 > You go to a busy restaurant.
 > Waiter gives you token #42 and leaves to serve other tables.
 > Kitchen finishes → calls "token 42!" → you collect food.
 > Token 42 = Future. Represents a value that doesn't exist yet but will.
 
 #### Before Futures — Callback Hell
+
 ```java
 // Pyramid of Doom — unreadable, unmaintainable
 placeOrder(orderId, (orderResult) -> {
@@ -1665,6 +1793,7 @@ placeOrder(orderId, (orderResult) -> {
 ```
 
 Problems:
+
 ```
 1. Unreadable     → logic buried 5 levels deep
 2. Error handling → try/catch doesn't work across callbacks
@@ -1673,7 +1802,9 @@ Problems:
 ```
 
 #### How Future Works — The Mechanism
+
 Future object sits on heap. Holds two things:
+
 1. Where to put the result when it arrives
 2. What to do next (nextStep) when result arrives
 
@@ -1698,6 +1829,7 @@ DB responds:
 ```
 
 #### The Full Chain
+
 ```
 Future 1: saveToDatabase()
 "when done → run chargePayment()"
@@ -1717,6 +1849,7 @@ OS fills in result → Future triggers next step → thread pool runs it.
 **No thread ever waits. No stack ever sits idle.**
 
 #### Three States of a Future
+
 ```
 PENDING    → IO operation in progress, no value yet
 COMPLETED  → IO operation succeeded, value available
@@ -1724,6 +1857,7 @@ FAILED     → IO operation failed, exception available
 ```
 
 #### Code — CompletableFuture in Java
+
 ```java
 import java.util.concurrent.CompletableFuture;
 
@@ -1765,9 +1899,11 @@ public class SwiggyX {
 ```
 
 Read the chain out loud:
+
 > Save to DB → when done → charge payment → when done → notify restaurant → when done → done ✅
 
 #### Callback Hell vs CompletableFuture
+
 ```
 CALLBACK HELL                    COMPLETABLE FUTURE
 ─────────────────────────────    ──────────────────────────────
@@ -1780,6 +1916,7 @@ Pyramid. Unreadable.             Clean. Linear. Readable.
 ```
 
 #### Why Stack is Expensive, Heap is Cheap
+
 ```
 Thread WAITING (old way):
 OS tracks thread, schedules it, manages 1MB stack
@@ -1802,51 +1939,57 @@ Difference: 2000x less memory
 > **Async moves waiting from people (stacks) to sticky notes (heap objects).**
 
 #### JavaScript Promise — Same Concept
+
 ```javascript
-fetch('https://api.swiggyx.com/order/101')  // returns Promise immediately
-    .then(response => response.json())        // when done →
-    .then(order => processOrder(order))       // when done →
-    .then(result => sendNotification(result)) // when done →
-    .catch(error => console.log(error));      // on any failure
+fetch("https://api.swiggyx.com/order/101") // returns Promise immediately
+  .then((response) => response.json()) // when done →
+  .then((order) => processOrder(order)) // when done →
+  .then((result) => sendNotification(result)) // when done →
+  .catch((error) => console.log(error)) // on any failure
 ```
+
 `.then()` = `.thenApplyAsync()`
 `.catch()` = `.exceptionally()`
-
 
 ---
 
 ### Concept 13 — Async / Await
 
 #### The Problem
+
 CompletableFuture chain works but is hard to read, hard to debug, hard to add logic.
 Developers wanted async code that looks like normal sequential code.
 
 #### Mental Model
+
 > `await` = "pause THIS FUNCTION here — free the thread — resume when IO done."
 > Not thread suspended. FUNCTION suspended.
 > Thread is completely freed to do other work.
 
 #### The Critical Distinction
+
 ```
 Thread suspended  = thread stuck, doing nothing, 1MB stack wasted
 Function suspended = function paused on heap, thread FREE to do other work
 ```
 
 #### What await Actually Does — Step by Step
+
 ```javascript
 async function processOrder(orderId) {
-    const saved = await saveToDatabase(orderId);
-    //            1. saveToDatabase() starts → returns Promise
-    //            2. await sees Promise → SUSPENDS this function
-    //            3. function state moves to HEAP (tiny object)
-    //            4. thread is FREED → goes to handle other requests
-    //            5. DB responds 20ms later → Promise COMPLETES
-    //            6. thread RESUMES function here → saved = result
-    //            7. continues to next line
+  const saved = await saveToDatabase(orderId)
+  //            1. saveToDatabase() starts → returns Promise
+  //            2. await sees Promise → SUSPENDS this function
+  //            3. function state moves to HEAP (tiny object)
+  //            4. thread is FREED → goes to handle other requests
+  //            5. DB responds 20ms later → Promise COMPLETES
+  //            6. thread RESUMES function here → saved = result
+  //            7. continues to next line
 }
 ```
 
 #### The Bookmark — Memory Picture
+
 ```
 Without await:
 Stack
@@ -1873,50 +2016,61 @@ Picks up next order            Tiny. Cheap. On heap.
 > **Stack → expensive, thread tied to it. Heap → cheap, thread completely free.**
 
 #### JavaScript async/await
+
 ```javascript
 // Promise chain — works but ugly
 function processOrder(orderId) {
-    return saveToDatabase(orderId)
-        .then(result => chargePayment(result))
-        .then(result => notifyRestaurant(result));
+  return saveToDatabase(orderId)
+    .then((result) => chargePayment(result))
+    .then((result) => notifyRestaurant(result))
 }
 
 // async/await — clean, readable, same behavior
 async function processOrder(orderId) {
-    const saved    = await saveToDatabase(orderId);   // bookmark 1
-    const paid     = await chargePayment(saved);      // bookmark 2
-    const notified = await notifyRestaurant(paid);    // bookmark 3
-    return notified;
+  const saved = await saveToDatabase(orderId) // bookmark 1
+  const paid = await chargePayment(saved) // bookmark 2
+  const notified = await notifyRestaurant(paid) // bookmark 3
+  return notified
 }
 ```
 
 #### What Compiler Actually Generates
+
 async/await is syntactic sugar. Compiler splits function at every await into a state machine:
+
 ```javascript
 // What YOU write:
 async function processOrder(orderId) {
-    const saved = await saveToDatabase(orderId);
-    const paid  = await chargePayment(saved);
-    return paid;
+  const saved = await saveToDatabase(orderId)
+  const paid = await chargePayment(saved)
+  return paid
 }
 
 // What COMPILER generates (simplified):
 function processOrder(orderId) {
-    let state = 0;
-    let saved;
-    function step(value) {
-        switch(state) {
-            case 0: state = 1; return saveToDatabase(orderId).then(step);
-            case 1: saved = value; state = 2; return chargePayment(saved).then(step);
-            case 2: return value;
-        }
+  let state = 0
+  let saved
+  function step(value) {
+    switch (state) {
+      case 0:
+        state = 1
+        return saveToDatabase(orderId).then(step)
+      case 1:
+        saved = value
+        state = 2
+        return chargePayment(saved).then(step)
+      case 2:
+        return value
     }
-    return step();
+  }
+  return step()
 }
 ```
+
 You write clean code. Compiler generates the messy chain.
 
 #### Java — CompletableFuture
+
 ```java
 public CompletableFuture<String> processOrder(String orderId) {
     return saveToDatabase(orderId)
@@ -1934,6 +2088,7 @@ public CompletableFuture<String> processOrder(String orderId) {
 ```
 
 #### async/await vs Threads
+
 ```
 THREADS:
 Stack frame lives entire time → thread tied → 1MB occupied for 100ms
@@ -1946,6 +2101,7 @@ Freed during every IO wait
 ```
 
 #### SwiggyX Impact
+
 ```
 Without async:
 10,000 orders × 1 thread × 100ms IO = 10,000 threads = 10GB RAM wasted
@@ -1957,18 +2113,19 @@ Handful of threads handle everything
 Server handles load easily
 ```
 
-
 ---
 
 ### Concept 14 — The Event Loop
 
 #### The Problem
+
 async/await suspends functions. Futures sit on heap.
 But what actually orchestrates all of this?
 What picks up suspended functions when IO completes?
 That's the Event Loop.
 
 #### Mental Model
+
 > Event Loop = one very fast, very organized waiter.
 > Notepad = call stack (what's running right now)
 > Priority inbox = microtask queue (Promises, await resumes)
@@ -1978,6 +2135,7 @@ That's the Event Loop.
 #### Three Components
 
 **Call Stack** — what's executing right now
+
 ```
 Call Stack
 ┌─────────────────────┐
@@ -1989,6 +2147,7 @@ Single thread. One thing at a time.
 ```
 
 **Microtask Queue** — highest priority
+
 ```
 Promise .then() callbacks go here
 await resumes go here
@@ -1999,6 +2158,7 @@ Processed COMPLETELY before any macro task runs
 ```
 
 **Event Queue (Macro-task Queue)** — lower priority
+
 ```
 DB responses go here
 HTTP requests go here
@@ -2009,6 +2169,7 @@ setTimeout callbacks go here
 ```
 
 #### The Event Loop Rule
+
 ```
 while (true) {
     if (callStack is empty) {
@@ -2019,6 +2180,7 @@ while (true) {
 ```
 
 #### Full Picture
+
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    NODE.JS PROCESS                      │
@@ -2038,17 +2200,18 @@ while (true) {
 ```
 
 #### Step by Step — SwiggyX Order in Node.js
+
 ```javascript
 async function processOrder(orderId) {
-    console.log("1. Order received:", orderId);      // line A
-    const saved = await saveToDatabase(orderId);     // line B — await here
-    console.log("2. Order saved:", saved);           // line C
-    const paid = await chargePayment(saved);         // line D — await here
-    console.log("3. Payment done:", paid);           // line E
+  console.log("1. Order received:", orderId) // line A
+  const saved = await saveToDatabase(orderId) // line B — await here
+  console.log("2. Order saved:", saved) // line C
+  const paid = await chargePayment(saved) // line D — await here
+  console.log("3. Payment done:", paid) // line E
 }
 
-processOrder("ORDER_101");
-console.log("4. Server ready for next request");     // line F
+processOrder("ORDER_101")
+console.log("4. Server ready for next request") // line F
 ```
 
 ```
@@ -2075,6 +2238,7 @@ Step 6 → hits await chargePayment() → same thing happens again
 ```
 
 Output:
+
 ```
 1. Order received: ORDER_101
 4. Server ready for next request    ← ran while DB was processing
@@ -2083,6 +2247,7 @@ Output:
 ```
 
 #### Microtask vs Event Queue Priority
+
 ```javascript
 console.log("A");
 setTimeout(() => console.log("B"), 0);     // Event Queue — even 0ms
@@ -2091,16 +2256,19 @@ console.log("D");
 
 Output: A → D → C → B
 ```
+
 Promise .then() always runs before setTimeout — even with 0ms delay.
 Microtask queue always fully drained before any event queue task.
 
 #### ⚠️ CPU Work Destroys Node.js Performance
+
 ```javascript
-app.get('/recommend', (req, res) => {
-    const result = runMLModel(req.userId); // CPU intensive — NO await
-    res.send(result);                      // blocks thread entire time
-});
+app.get("/recommend", (req, res) => {
+  const result = runMLModel(req.userId) // CPU intensive — NO await
+  res.send(result) // blocks thread entire time
+})
 ```
+
 ```
 Call Stack: [runMLModel()]  ← stuck, not empty
 Event Loop: waiting...
@@ -2108,10 +2276,11 @@ Event Queue: [10,000 user requests] ← all waiting
 Nobody served until ML calculation finishes.
 ```
 
-> IO work  → await → thread freed → event loop handles others → perfect
+> IO work → await → thread freed → event loop handles others → perfect
 > CPU work → no await → thread stuck → event loop blocked → disaster
 
 #### How Node.js Handles 10,000 Requests
+
 ```
 10,000 orders arrive
 Each hits await DB → function suspended → heap
@@ -2127,6 +2296,7 @@ Thread never blocked. Never idle.
 ```
 
 #### Who Does the IO Work?
+
 ```
 Thread sends DB query → OS takes over
 Thread goes back to event loop
@@ -2139,6 +2309,7 @@ Thread just sends and receives.
 ```
 
 #### Java vs JavaScript — Same Philosophy
+
 ```
 JavaScript                    Java
 ──────────────────────────    ──────────────────────────
@@ -2154,12 +2325,12 @@ Both: resume when IO signals done
 Difference: JS uses 1 thread, Java uses many threads
 ```
 
-
 ---
 
 ### Side Note — What IO Actually Means
 
 #### IO = Input/Output
+
 Any operation where your program talks to something **outside the CPU.**
 
 ```
@@ -2168,6 +2339,7 @@ Everything outside the CPU = IO.
 ```
 
 #### The Complete List
+
 ```
 NETWORK IO
 ├── HTTP request to another server
@@ -2190,6 +2362,7 @@ OTHER IO
 ```
 
 #### Why IO is Slow — Physical Reality
+
 ```
 CPU operation:         0.3 nanoseconds
 RAM access:            100 nanoseconds
@@ -2199,6 +2372,7 @@ Network (cross world): 150 milliseconds
 ```
 
 When you query a DB:
+
 ```
 Your code → network packet → travels through wire →
 reaches DB server → DB finds data →
@@ -2210,6 +2384,7 @@ CPU finishes in nanoseconds. Waits milliseconds for packet back.
 ```
 
 #### CPU Work vs IO Work — The Clean Line
+
 ```
 CPU work (fast, no waiting):        IO work (slow, waiting):
 ├── Math calculations               ├── Any DB call
@@ -2222,7 +2397,6 @@ CPU work (fast, no waiting):        IO work (slow, waiting):
 > **IO = anything requiring leaving the CPU and talking to the outside world.**
 > **Always slow. Always worth making async.**
 
-
 ---
 
 ## PHASE 5 — REAL WORLD MODELS
@@ -2232,7 +2406,9 @@ CPU work (fast, no waiting):        IO work (slow, waiting):
 ### Concept 15 — Java Concurrency Deep Dive
 
 #### The Problem CompletableFuture Didn't Fully Solve
+
 CompletableFuture solved memory — but created complexity:
+
 ```
 Hard to read
 Hard to debug
@@ -2242,6 +2418,7 @@ Junior devs struggle
 ```
 
 The dream:
+
 ```java
 // Write this — simple, sequential, normal try/catch
 // BUT thread never actually waits underneath
@@ -2253,6 +2430,7 @@ String notified = notifyRestaurant(paid);
 That's what Virtual Threads give you.
 
 #### Platform Thread vs Virtual Thread
+
 ```
 Platform Thread:
 → Created by OS
@@ -2273,6 +2451,7 @@ Virtual Thread:
 ```
 
 #### The Two Layer System
+
 ```
 ┌──────────────────────────────────────────────────────┐
 │                     JVM                              │
@@ -2290,6 +2469,7 @@ Virtual Thread:
 ```
 
 #### What Happens When Virtual Thread Hits IO
+
 ```
 VT1 running on PT1
 hits saveToDatabase() — IO call
@@ -2309,6 +2489,7 @@ Step 4: VT1 resumes at line 4, orderId still = "O_101"
 ```
 
 #### Memory — 10,000 Orders
+
 ```
 Platform Threads:
 10,000 × 1MB = 10GB — all waiting, RAM exhausted
@@ -2322,6 +2503,7 @@ Same 10,000 orders. 350x less memory.
 ```
 
 #### Code — Virtual Threads Java 21
+
 ```java
 // Old way — limited by thread count
 ExecutorService pool = Executors.newFixedThreadPool(200);
@@ -2348,6 +2530,7 @@ public static void handleOrder(String orderId) {
 ```
 
 #### CompletableFuture vs Virtual Threads — Functionally Same
+
 ```
 Both:
 → Thread freed during IO ✅
@@ -2380,6 +2563,7 @@ try {
 ```
 
 #### When to Still Use CompletableFuture
+
 ```
 1. Parallel tasks simultaneously
    CompletableFuture<String> menu    = fetchMenu();
@@ -2394,6 +2578,7 @@ try {
 ```
 
 #### Virtual Threads vs Platform Threads — When to Use What
+
 ```
 IO intensive work          CPU intensive work
 ─────────────────────────  ─────────────────────────
@@ -2412,6 +2597,7 @@ millions of them            just 8-16 of them
 > **Virtual Threads = IO work. Platform Threads = CPU work. Both needed. Different jobs.**
 
 #### Java 21 vs Node.js
+
 ```
 Pure IO:         Java VT = Node.js (equal)
 IO + CPU:        Java wins — platform threads handle CPU natively
@@ -2421,6 +2607,7 @@ Startup time:    Node.js faster — important for serverless
 ```
 
 #### Evolution of Java Concurrency
+
 ```
 Java 1  (1995):  Raw threads
 Java 5  (2004):  ExecutorService — thread pools
@@ -2429,6 +2616,7 @@ Java 21 (2023):  Virtual Threads — write sync, get async performance
 ```
 
 #### Android — UI Thread Rule
+
 ```
 UI Thread = draws screen, handles taps
 Rule: NEVER block the UI thread. Ever.
@@ -2451,17 +2639,18 @@ button.setOnClickListener(v -> {
 });
 ```
 
-
 ---
 
 ### Concept 16 — JavaScript Concurrency
 
 #### The Problem
+
 Node.js single thread + event loop = perfect for IO.
 But CPU intensive work blocks the thread → event loop frozen → everyone waits.
 Real apps need CPU work too — ML models, image resizing, PDF generation, route calculation.
 
 #### Solution — Web Workers (Browser) / Worker Threads (Node.js)
+
 > Worker = completely separate thread with own event loop, own memory, own call stack.
 > Not sharing memory. Completely isolated.
 > Communicates via message passing only.
@@ -2476,60 +2665,63 @@ handles IO, UI             handles CPU work
 ```
 
 #### Web Workers in Browser
+
 ```javascript
 // main.js — main thread
-const worker = new Worker('fraud-detection.js');
+const worker = new Worker("fraud-detection.js")
 
-worker.postMessage({ orderId: "ORDER_101", userId: "U_1", amount: 450 });
+worker.postMessage({ orderId: "ORDER_101", userId: "U_1", amount: 450 })
 
 worker.onmessage = (event) => {
-    console.log("Fraud check result:", event.data);
-};
+  console.log("Fraud check result:", event.data)
+}
 
-console.log("Submitted. Handling next request..."); // runs immediately
+console.log("Submitted. Handling next request...") // runs immediately
 ```
 
 ```javascript
 // fraud-detection.js — worker thread
 self.onmessage = (event) => {
-    const { orderId, userId, amount } = event.data;
-    const isFraud = runMLModel(userId, amount); // CPU work here, not main thread
-    self.postMessage({ orderId, isFraud });
-};
+  const { orderId, userId, amount } = event.data
+  const isFraud = runMLModel(userId, amount) // CPU work here, not main thread
+  self.postMessage({ orderId, isFraud })
+}
 ```
 
 #### Worker Threads in Node.js
+
 ```javascript
-const { Worker } = require('worker_threads');
+const { Worker } = require("worker_threads")
 
-app.post('/place-order', async (req, res) => {
-    const order = req.body;
+app.post("/place-order", async (req, res) => {
+  const order = req.body
 
-    const saved = await saveToDatabase(order);  // IO — async, thread freed
+  const saved = await saveToDatabase(order) // IO — async, thread freed
 
-    // CPU work — offload to worker
-    const fraudResult = await runInWorker('fraud-worker.js', {
-        userId: order.userId,
-        amount: order.amount
-    });
+  // CPU work — offload to worker
+  const fraudResult = await runInWorker("fraud-worker.js", {
+    userId: order.userId,
+    amount: order.amount,
+  })
 
-    if (fraudResult.isFraud) {
-        res.status(400).send("Order blocked");
-    } else {
-        res.send("Order confirmed: " + saved);
-    }
-});
+  if (fraudResult.isFraud) {
+    res.status(400).send("Order blocked")
+  } else {
+    res.send("Order confirmed: " + saved)
+  }
+})
 
 function runInWorker(file, data) {
-    return new Promise((resolve, reject) => {
-        const worker = new Worker(file, { workerData: data });
-        worker.on('message', resolve);
-        worker.on('error', reject);
-    });
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(file, { workerData: data })
+    worker.on("message", resolve)
+    worker.on("error", reject)
+  })
 }
 ```
 
 #### No Shared Memory — The Key Difference
+
 ```
 Java threads:
 Thread 1 and Thread 2 share HEAP
@@ -2546,17 +2738,19 @@ Cannot read each other's variables
 ```
 
 #### The Cost — Data Copying
+
 ```javascript
 // Data gets COPIED when sent to worker — expensive for large data
-worker.postMessage({ orders: largeArrayOf10000Orders });
+worker.postMessage({ orders: largeArrayOf10000Orders })
 
 // Solution — Transferable objects (zero copy, ownership transfer)
-const buffer = new ArrayBuffer(largeImageData);
-worker.postMessage({ image: buffer }, [buffer]); // transferred, not copied
+const buffer = new ArrayBuffer(largeImageData)
+worker.postMessage({ image: buffer }, [buffer]) // transferred, not copied
 // main thread can no longer access buffer — worker owns it now
 ```
 
 #### JavaScript Concurrency — Full Picture
+
 ```
 JavaScript
 ├── Main Thread (single)
@@ -2574,6 +2768,7 @@ JavaScript
 ```
 
 #### SwiggyX Node.js Architecture
+
 ```
 Main Thread (Event Loop)
 ├── receives HTTP requests
@@ -2589,6 +2784,7 @@ Worker Thread Pool
 ```
 
 #### Java vs JavaScript Philosophy
+
 ```
 Java:        shared memory → needs mutex → powerful but complex
 JavaScript:  message passing → no shared memory → safer but copying costs
@@ -2596,12 +2792,12 @@ JavaScript:  message passing → no shared memory → safer but copying costs
 Neither wrong. Different tradeoffs. Different use cases.
 ```
 
-
 ---
 
 ### Concept 17 — Go Goroutines
 
 #### What Go is solving
+
 Java: shared heap + mutex = powerful but complex, race conditions possible
 JavaScript: no shared memory + message passing = safe but data copying expensive
 Go: shared heap + channels for ownership transfer = safe + performant + simple
@@ -2609,6 +2805,7 @@ Go: shared heap + channels for ownership transfer = safe + performant + simple
 ---
 
 #### Step 1 — Normal Go Program (no goroutines)
+
 ```go
 func main() {
     handleOrder("ORDER_101")  // runs, main waits
@@ -2616,11 +2813,13 @@ func main() {
     handleOrder("ORDER_303")  // runs after 202 done
 }
 ```
+
 Sequential. One thing at a time. Same as Java main thread.
 
 ---
 
 #### Step 2 — Adding `go` keyword (creating a goroutine)
+
 ```go
 func main() {
     go handleOrder("ORDER_101")  // new goroutine — main doesn't wait
@@ -2630,6 +2829,7 @@ func main() {
 ```
 
 The moment you write `go`:
+
 ```
 1. Go runtime creates a new goroutine
 2. Gives it its own tiny stack (~2KB on heap)
@@ -2638,6 +2838,7 @@ The moment you write `go`:
 ```
 
 Memory:
+
 ```
 ┌─────────────────────────────────────────┐
 │  HEAP                                   │
@@ -2662,6 +2863,7 @@ Looks exactly like Java threads — but 2KB stacks instead of 1MB
 ---
 
 #### Step 3 — Go Runtime Schedules Goroutines onto OS Threads
+
 ```
 4 cores → Go creates 4 OS threads
 
@@ -2678,11 +2880,13 @@ OS Thread 2 → Core 2 (truly parallel)
 OS Thread 3 → Core 3 (truly parallel)
 OS Thread 4 → Core 4 (truly parallel)
 ```
+
 Exactly like Java Platform Threads on cores.
 
 ---
 
 #### Step 4 — Goroutine Hits IO
+
 ```go
 func handleOrder(orderId string) {
     result := saveToDatabase(orderId)  // IO — network call to DB
@@ -2715,6 +2919,7 @@ Step 4 → Go runtime mounts next goroutine onto OS Thread 1
 ---
 
 #### Step 5 — DB Responds
+
 ```
 OS signals: "DB response for Goroutine 1"
 
@@ -2730,6 +2935,7 @@ Step 4 → resumes at line 2
 ---
 
 #### Full Picture — 10,000 Orders
+
 ```
 10,000 goroutines created
 2KB each = 20MB total RAM (vs 10GB for Java platform threads)
@@ -2751,6 +2957,7 @@ At any moment:
 ---
 
 #### Goroutine vs Java Virtual Thread — Identical Mechanism
+
 ```
 Java Virtual Thread hits IO:        Go Goroutine hits IO:
 → JVM suspends it                   → Go runtime suspends it
@@ -2765,6 +2972,7 @@ Go had this since 2009. Java got it in 2021.
 ---
 
 #### Channels — Go's Communication Pattern
+
 Go has shared heap — same as Java.
 But goroutines are encouraged to transfer ownership through channels
 instead of sharing references directly.
@@ -2803,6 +3011,7 @@ drops reference                       now owns result
 ---
 
 #### Buffered vs Unbuffered Channels
+
 ```
 Unbuffered channel:
 ch := make(chan string)
@@ -2819,6 +3028,7 @@ ch := make(chan string, 10)
 ---
 
 #### The Famous Go Philosophy
+
 > **"Do not communicate by sharing memory. Share memory by communicating."**
 
 ```
@@ -2830,6 +3040,7 @@ Go:     goroutine owns data → sends through channel → other goroutine receiv
 ---
 
 #### Go Handles Both IO and CPU Naturally
+
 ```
 IO work:
 Goroutine hits DB call
@@ -2859,6 +3070,7 @@ All truly parallel. No blocking. No worker thread complexity.
 ---
 
 #### Three Languages — Complete Comparison
+
 ```
                 Node.js         Java            Go
 ─────────────   ─────────────   ─────────────   ─────────────
@@ -2876,6 +3088,7 @@ CPU scale       complex         natural         natural
 ---
 
 #### Why Go is Popular for Backend Systems
+
 ```
 Swiggy delivery routing → Go
 Uber dispatch system    → Go
@@ -2894,6 +3107,7 @@ Because:
 ---
 
 #### Memory Layout — Go vs Java
+
 ```
 JAVA:
 ┌─────────────────────────────────────┐
@@ -2917,7 +3131,6 @@ GO:
 Same concept. Go stacks tiny, live on heap when suspended.
 ```
 
-
 ---
 
 ## PHASE 6 — CONNECT EVERYTHING
@@ -2927,9 +3140,11 @@ Same concept. Go stacks tiny, live on heap when suspended.
 ### Concept 18 — Threads vs Async
 
 #### The One Question That Decides Everything
+
 > **"What is the bottleneck — IO or CPU?"**
 
 #### IO Intensive → Async Wins
+
 ```
 handleOrder():
     save to DB          ← IO (20ms waiting)
@@ -2954,12 +3169,13 @@ pool.submit(() -> handleOrder(orderId));
 ```javascript
 // Node.js — async/await
 async function handleOrder(orderId) {
-    const saved = await saveToDatabase(orderId);
-    const paid  = await chargePayment(saved);
+  const saved = await saveToDatabase(orderId)
+  const paid = await chargePayment(saved)
 }
 ```
 
 #### CPU Intensive → Threads Win
+
 ```
 runFraudDetection():
     process features    ← CPU (200ms calculating)
@@ -2983,6 +3199,7 @@ cpuPool.submit(() -> runFraudDetection(order));
 ```
 
 #### Why More Threads Than Cores Hurts CPU Work
+
 ```
 CPU doing ML model calculation — cache loaded with thread's data
 OS switches thread (doesn't know it's CPU work)
@@ -3000,6 +3217,7 @@ With threads > cores:    constant eviction, 20-30% slower
 ```
 
 IO work has no cache problem:
+
 ```
 IO thread suspended immediately → goes to heap → CPU cache not loaded
 IO completes → thread resumes → just processes a response value
@@ -3009,6 +3227,7 @@ No cache dependency → extra virtual threads = fine
 > **CPU doesn't know if it's CPU or IO work. YOU make the architectural decision.**
 
 #### The Decision Framework
+
 ```
 Task waiting for something external?    Task calculating something?
 (DB, network, API, file)                (ML, sorting, encryption)
@@ -3024,6 +3243,7 @@ Task waiting for something external?    Task calculating something?
 ```
 
 #### The Rules
+
 ```
 Rule 1: IO intensive + need scale → async
         CPU intensive + need speed → fixed thread pool = num of cores
@@ -3039,6 +3259,7 @@ Rule 4: Never do IO work with blocking platform threads at scale
 ```
 
 #### SwiggyX Mixed Architecture
+
 ```java
 public class SwiggyX {
 
@@ -3069,7 +3290,6 @@ public class SwiggyX {
     }
 }
 ```
-
 
 ---
 
@@ -3109,12 +3329,12 @@ IO work  → virtual threads → freely create millions → OS thread freed imme
 
 The programmer makes the right choice. OS just executes whatever you give it.
 
-
 ---
 
 ### Concept 19 — Concurrency vs Parallelism
 
 #### The Definitions
+
 ```
 Concurrency  =  dealing with many things at once
 Parallelism  =  doing many things at once
@@ -3123,6 +3343,7 @@ One word difference. Completely different meaning.
 ```
 
 #### The Kitchen Analogy
+
 ```
 CONCURRENCY — one chef, many orders:
 One chef. Three orders.
@@ -3141,6 +3362,7 @@ Truly simultaneous. All at exact same instant.
 ```
 
 #### Technical Definition
+
 ```
 Concurrency:
 One CPU core switching rapidly between tasks
@@ -3156,6 +3378,7 @@ Real simultaneity
 ```
 
 #### Single Core vs Multi Core
+
 ```
 SINGLE CORE — concurrency only:
 Time ──────────────────────────────────────►
@@ -3174,6 +3397,7 @@ Core 4: [T4][T2][T6][T4]   ← switching (concurrency)
 ```
 
 #### The Relationship
+
 ```
 ┌─────────────────────────────────┐
 │         CONCURRENCY             │
@@ -3189,6 +3413,7 @@ Concurrency is not always parallel.
 ```
 
 #### Node.js — Concurrent but NOT Parallel
+
 ```
 Node.js: single thread + event loop
 10,000 requests in progress simultaneously → CONCURRENT
@@ -3205,6 +3430,7 @@ Node.js gets parallelism only with Worker Threads
 ```
 
 #### Java — Both Concurrent AND Parallel
+
 ```
 8 core machine, 1000 threads
 8 threads truly running simultaneously → PARALLELISM
@@ -3213,6 +3439,7 @@ Both at the same time.
 ```
 
 #### SwiggyX
+
 ```
 Order handling (IO):
 Concurrency enough
@@ -3229,6 +3456,7 @@ More cores = directly faster
 ```
 
 #### One Line Summary
+
 ```
 Concurrency  = structure  — one core, many tasks, switching
 Parallelism  = execution  — many cores, truly simultaneous
@@ -3237,17 +3465,18 @@ You can have concurrency without parallelism.
 You cannot have parallelism without multiple cores.
 ```
 
-
 ---
 
 ### Concept 20 — Real World Architecture
 
 #### The Scenario
+
 > 8PM. Friday. IPL match just ended. 1 million users open Swiggy simultaneously.
 
 ---
 
 #### Layer 1 — Load Balancer
+
 One server can never handle 1M requests/minute.
 Load balancer distributes across many identical servers.
 
@@ -3272,6 +3501,7 @@ Each handles ~10,000 requests/minute
 ---
 
 #### Layer 2 — Java Backend Server (per server)
+
 Each server has two pools + DB connection pool:
 
 ```java
@@ -3332,6 +3562,7 @@ public void handleRequest(HttpRequest request) {
 ```
 
 Timeline per request:
+
 ```
 0ms    → getUserId, getItemId (instant)
 1ms    → userDB.findById() → SUSPENDED (IO)
@@ -3355,6 +3586,7 @@ Platform threads:        never blocked, always doing real work
 ---
 
 #### Layer 3 — Cache (Redis)
+
 Most menu reads are repeated. Don't hit DB every time.
 
 ```
@@ -3382,6 +3614,7 @@ Cache miss: ~20ms
 ---
 
 #### Layer 4 — DB Connection Pool (Semaphore)
+
 ```
 10,000 virtual threads all need DB access
         │
@@ -3399,6 +3632,7 @@ PostgreSQL — never overwhelmed, always exactly 20 connections
 ---
 
 #### Layer 5 — Fraud Detection (CPU work)
+
 ```
 Virtual thread hits fraud check
 → submits to Platform Thread Pool (8 threads = 8 cores)
@@ -3419,6 +3653,7 @@ Cache stays hot — no over-switching
 ---
 
 #### Layer 6 — Message Queue (Kafka)
+
 Non-critical work doesn't need to happen immediately:
 
 ```
@@ -3445,6 +3680,7 @@ Everything else happens in background
 ---
 
 #### Layer 7 — Real-time Tracking (Node.js)
+
 ```
 Driver's phone → sends location every 2 seconds
         │
@@ -3465,6 +3701,7 @@ Node.js event loop perfect:
 ---
 
 #### Layer 8 — Multiple Servers (Horizontal Scaling)
+
 Never one server. Always many identical copies.
 
 ```
@@ -3503,6 +3740,7 @@ Never one server. Always many identical copies.
 ---
 
 #### Microservices — Each Service Independent
+
 ```
 Order Service       → Java servers    (order handling)
 Tracking Service    → Node.js servers (real-time location)
@@ -3520,6 +3758,7 @@ Each service:
 ---
 
 #### Auto Scaling — Pay for What You Use
+
 ```
 Dinner rush (8PM):
 → Java servers:   scale UP   to 100
@@ -3535,6 +3774,7 @@ Dinner rush (8PM):
 ---
 
 #### Handling Slow Steps — Real Production Engineering
+
 ```
 Strategy 1 — Timeout + Fallback:
 Fraud check > 500ms → assume not fraud → flag for manual review
@@ -3557,6 +3797,7 @@ Doesn't need result:       email, analytics, recommendations
 ---
 
 #### Optimized SwiggyX Flow
+
 ```
 User taps Order Now
         │
@@ -3585,6 +3826,7 @@ Send email, update analytics, assign driver, notify restaurant
 ---
 
 #### Every Concept Visible in This System
+
 ```
 Concept 1  → Why concurrency: 1M users, sequential impossible
 Concept 2  → Threads: virtual threads per request
@@ -3610,6 +3852,7 @@ Concept 19 → Concurrency vs parallelism: both present
 ---
 
 #### The Numbers
+
 ```
 1,000,000 requests/minute
 100 Java servers
@@ -3628,3 +3871,201 @@ Average response: ~250ms
 User experience: smooth
 ```
 
+---
+
+### Concept 21 — Final Teach-Back & Complete Summary
+
+#### The Full Journey — In Your Own Words
+
+**Why Concurrency Exists:**
+Sequential server processes one request at a time.
+Second order waits until first is fully processed.
+At dinner rush — unacceptable. Restaurant shuts down.
+Solution: create a thread per request so all orders processed simultaneously.
+
+**Process vs Thread:**
+Process = main program. OS gives it stack, heap, CODE, DATA.
+Thread = single execution unit inside process.
+Each thread needs own stack — else threads override each other's variables.
+All threads share heap — objects, shared data live here.
+Thread own stack: ~1MB. 10,000 threads = 10GB RAM.
+
+**The Shared Heap Problem:**
+Heap shared by all threads.
+Two threads updating inventory simultaneously → race condition.
+LOAD-MODIFY-STORE — 3 steps, not atomic, OS can switch between them.
+Multi-core: both cores execute same steps at same nanosecond.
+Single core: OS context switches between steps — same broken result.
+
+**Context Switching:**
+OS saves thread's PC, SP, registers into Control Block.
+Loads next thread's context. Thread resumes exactly where left off.
+SP saves stack pointer → stack frames survive context switches.
+Cost: ~1-10 microseconds + cache eviction.
+
+**Thread Pool:**
+Creating threads expensive. 10,000 threads = 10GB RAM.
+Thread pool: fixed threads pre-created, tasks queue, threads reused.
+Java: ExecutorService. Tasks submitted, pool decides which thread picks up.
+
+**Race Condition:**
+Two threads, shared memory, simultaneous read-write.
+LOAD-MODIFY-STORE not atomic → both read same value → both confirm order.
+Fix: synchronized — monitor lock on every heap object.
+One thread inside critical section at a time.
+
+**Volatile:**
+CPU caches variables per core. Thread writes to cache, not RAM immediately.
+Other thread reads stale value from its own cache.
+volatile → forces all reads/writes directly to RAM.
+volatile fixes visibility. synchronized fixes atomicity. Different problems.
+
+**Mutex & Locks:**
+synchronized locks the object door — not the variables.
+Variables protected because nobody else can enter.
+Must synchronize ALL access — reads AND writes.
+Ask: shared? mutable? multiple writers? All yes → protect it.
+Mutex = concept. synchronized = Java's mutex. Lock = what you acquire.
+
+**Semaphore:**
+Mutex = one thread at a time.
+Semaphore = N threads at a time.
+DB connection pool: Semaphore(20) — max 20 connections, rest wait.
+Always release in finally. Semaphore controls headcount, not data safety.
+
+**Deadlock:**
+Thread 1 holds Lock A, wants Lock B.
+Thread 2 holds Lock B, wants Lock A.
+Circular dependency. Nobody moves. Forever.
+Fix: always acquire locks in same order everywhere.
+
+**Starvation:**
+System moving. One thread never gets CPU.
+Low priority thread always skipped during high load.
+Fix: ReentrantLock(fair=true) — strict FIFO. Priority aging.
+
+**The IO Problem:**
+Thread waiting for DB = 1MB stack sitting idle.
+10,000 threads waiting = 10GB RAM doing nothing.
+CPU doing nothing 99% of time. Server crashes at scale.
+
+**Futures & Promises:**
+Thread hits IO → creates Future object on heap (tiny placeholder).
+Platform thread FREED → picks up next task.
+DB responds → Future completes → any free thread picks up next step.
+Stack expensive (1MB). Future cheap (500 bytes). 2000x less memory.
+Callback hell → CompletableFuture chains → clean, readable.
+
+**Async/Await:**
+await suspends the FUNCTION — not the thread.
+Function state saved to heap. Thread completely freed.
+Any free thread resumes function when IO completes.
+Compiler generates state machine — syntactic sugar over Futures.
+Java: Virtual Threads write sync code, JVM makes it async automatically.
+
+**Event Loop (Node.js):**
+Single thread. Call stack. Microtask queue. Macro task queue.
+Request hits IO → function suspended → thread free → next request.
+IO completes → goes to queue → event loop picks up → resumes.
+Microtasks (Promise .then, await) drain completely before any macro task.
+CPU work blocks thread → event loop frozen → everyone waits → disaster.
+
+**Virtual Threads (Java 21):**
+Platform Thread: 1MB, OS managed, expensive.
+Virtual Thread: starts 2KB, JVM managed, heap when suspended, millions possible.
+VT hits IO → JVM unmounts from PT → saves tiny stack to heap → PT freed.
+PT picks up next VT. DB responds → VT remounted on any free PT.
+Write normal sequential code. JVM handles async invisibly.
+Same as CompletableFuture performance. Better developer experience.
+
+**JavaScript Concurrency:**
+Single thread → CPU work blocks everything → need Worker Threads.
+Worker: own stack, own heap, own event loop. Completely isolated.
+Communicates via postMessage — no shared memory, no race conditions.
+Large data: Transfer ownership (zero copy) instead of copying.
+
+**Go Goroutines:**
+Goroutine = Go's Virtual Thread. Starts 2KB. Go runtime managed.
+Hits IO → suspended → OS thread freed → resumes when done.
+Channels = pipes between goroutines. Pass ownership, don't share.
+Go philosophy: communicate by passing, not by sharing.
+Go handles IO and CPU with one system. Java and Node need two.
+
+**Threads vs Async:**
+IO intensive → Virtual Threads / async. Pool > cores fine (mostly waiting).
+CPU intensive → Platform Thread Pool = num of cores. Cache stays hot.
+More CPU threads than cores → cache eviction → 100x slower on resume.
+OS scheduler blind — doesn't know CPU vs IO. YOU make the decision.
+
+**Concurrency vs Parallelism:**
+Concurrency = one chef, many orders, switching. Dealing with many things.
+Parallelism = many chefs, many orders, simultaneous. Doing many things.
+Node.js = concurrent (single thread switching). Not parallel.
+Java multi-core = both concurrent and parallel.
+Parallelism needs multiple cores. Concurrency does not.
+
+**Real World Architecture:**
+Load balancer → 100 Java servers.
+Each server: Virtual Thread Pool (IO) + Platform Thread Pool (CPU).
+DB Connection Pool: Semaphore(20).
+Redis cache: 90% hit rate, 1ms response.
+Message queue (Kafka): background work, user gets fast response.
+Node.js WebSocket server: real-time tracking, single thread, 20,000 connections.
+Microservices: each service independent, scales independently.
+Auto scaling: scale up at 8PM, scale down at 2AM.
+
+---
+
+#### The Blueprint — How Everything Connects
+
+```
+Sequential server broken
+        ↓
+Threads solve concurrency
+        ↓
+Shared heap causes race conditions
+        ↓
+synchronized fixes atomicity
+volatile fixes visibility
+        ↓
+Too many threads = too much RAM
+        ↓
+Thread pool limits thread count
+        ↓
+Locks cause deadlock + starvation
+        ↓
+Lock ordering + fair locks fix it
+        ↓
+Threads + IO = RAM wasted on waiting
+        ↓
+Futures/Promises = function on heap, thread freed
+        ↓
+async/await = clean syntax over Futures
+        ↓
+Event loop = Node.js single thread magic
+        ↓
+Virtual Threads = write sync, get async (Java 21)
+        ↓
+Worker Threads = CPU work in JS
+        ↓
+Goroutines = Go's answer to all of it
+        ↓
+IO → async, CPU → fixed thread pool
+        ↓
+Concurrency + Parallelism = both in real systems
+        ↓
+Everything visible in Swiggy at 1M requests
+```
+
+---
+
+#### 🎓 Signed Off
+
+> You walked through 20 concepts from memory.
+> You connected threads to stack frames.
+> You connected IO waiting to Future objects on heap.
+> You connected CPU work to cache eviction.
+> You connected everything to a real system.
+> You didn't memorize. You understood.
+>
+> **You own this now. You can teach it.**
