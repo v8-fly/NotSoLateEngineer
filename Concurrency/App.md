@@ -1191,3 +1191,444 @@ Creating DB Semaphore with 20 permits     ✅
 Started SwiggyXApplication in 1.953s     ✅
 HikariPool connected to PostgreSQL        ✅
 ```
+
+---
+
+## Real World Production Patterns
+
+> See swiggyx_concurrency.md for full details.
+> This section summarizes what we will implement after the learning version.
+
+### What We Built (Learning) vs What Production Uses
+
+```
+Problem              Our Code                Production
+───────────────────  ──────────────────────  ──────────────────────────
+Race condition       ReentrantLock           @Version optimistic locking
+Atomicity            Manual lock ordering    @Transactional
+Scale                Direct processing       Kafka message queue
+Distributed lock     ReentrantLock (broken!) Redis distributed lock
+DB connections       Semaphore(20)           HikariCP (already in app!)
+CPU work             In-process thread pool  Separate Python microservice
+```
+
+### Production Implementation Plan
+
+```
+Step 1 → Add @Version to Inventory entity (optimistic locking)
+Step 2 → Add @Transactional to OrderService methods
+Step 3 → Add Redis for distributed locking
+Step 4 → Add Kafka for order processing queue
+Step 5 → Configure HikariCP properly in application.properties
+Step 6 → Extract fraud detection to separate service
+```
+
+---
+
+## Step 5 — Order Controller
+
+Location: `src/main/java/com/swiggyx/controller/OrderController.java`
+
+### What is a Controller?
+
+```
+HTTP Request arrives
+        ↓
+Controller receives it
+        ↓
+Controller calls Service
+        ↓
+Service does all the work
+        ↓
+Controller returns response
+
+Controller has ONE job:
+Receive → extract data → call service → return response
+No business logic here. Ever. Business logic lives in Service.
+```
+
+### Annotations Explained
+
+```
+@RestController
+→ tells Spring: this class handles HTTP requests
+→ every method returns data directly as JSON
+→ no HTML templates
+
+@RequestMapping("/api/orders")
+→ all endpoints start with /api/orders
+
+@PostMapping("/place")
+→ handles POST requests to /api/orders/place
+→ POST = creating something new
+
+@GetMapping("/{id}")
+→ handles GET requests to /api/orders/1
+
+@RequestParam
+→ reads from URL query parameters
+→ /api/orders/place?userId=U1&amount=450
+
+@PathVariable
+→ reads from URL path
+→ /api/orders/101 → id = 101
+
+ResponseEntity
+→ wraps response with HTTP status code
+→ 200 OK, 404 Not Found, 500 Error
+```
+
+### Method name vs URL
+
+```
+Method name → for humans reading the code (semantic only)
+URL path    → defined by annotations, used by Spring and callers
+
+@PostMapping("/place")
+public ResponseEntity<String> placeOrder(...)
+                              ↑
+                              this name means nothing to Spring
+                              /place is what matters
+```
+
+### Understanding Key Code Patterns
+
+**findById with Optional:**
+
+```java
+orderRepository.findById(id)
+    .map(ResponseEntity::ok)           // if found → 200 with order
+    .orElse(ResponseEntity.notFound()  // if not found → 404
+        .build());
+
+Optional = safe way to handle "might not exist"
+         = box that either has Order inside or is empty
+.map()   = transform value if present
+.orElse()= fallback if empty
+```
+
+**ResponseEntity status codes:**
+
+```java
+ResponseEntity.ok(response)              // HTTP 200 — success
+ResponseEntity.notFound().build()        // HTTP 404 — not found
+ResponseEntity.internalServerError()     // HTTP 500 — server error
+    .body("Error: " + e.getMessage())
+```
+
+**@RequestParam vs @PathVariable:**
+
+```
+@PathVariable  → identifying specific resource
+               /orders/101 (which order?)
+               /users/USER_101 (which user?)
+
+@RequestParam  → providing data
+               /orders/place?userId=U1&amount=450
+```
+
+### Complete Code
+
+```java
+package com.swiggyx.controller;
+
+import com.swiggyx.model.Order;
+import com.swiggyx.repository.OrderRepository;
+import com.swiggyx.service.OrderService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+
+@RestController
+@RequestMapping("/api/orders")
+public class OrderController {
+
+    @Autowired
+    private OrderService orderService;
+
+    @Autowired
+    private OrderRepository orderRepository;
+
+    // POST /api/orders/place
+    @PostMapping("/place")
+    public ResponseEntity<String> placeOrder(
+            @RequestParam String userId,
+            @RequestParam String restaurantId,
+            @RequestParam String itemName,
+            @RequestParam int quantity,
+            @RequestParam double amount) {
+
+        try {
+            CompletableFuture<String> result =
+                orderService.processOrder(
+                    userId, restaurantId, itemName, quantity, amount);
+
+            String response = result.get(); // wait for result
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            return ResponseEntity
+                .internalServerError()
+                .body("Error: " + e.getMessage());
+        }
+    }
+
+    // GET /api/orders/{id}
+    @GetMapping("/{id}")
+    public ResponseEntity<Order> getOrder(@PathVariable Long id) {
+        return orderRepository.findById(id)
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.notFound().build());
+    }
+
+    // GET /api/orders/user/{userId}
+    @GetMapping("/user/{userId}")
+    public ResponseEntity<List<Order>> getUserOrders(
+            @PathVariable String userId) {
+        List<Order> orders = orderRepository.findByUserId(userId);
+        return ResponseEntity.ok(orders);
+    }
+
+    // GET /api/orders/status
+    @GetMapping("/status")
+    public ResponseEntity<String> getStatus() {
+        long totalOrders = orderRepository.count();
+        return ResponseEntity.ok(
+            "SwiggyX running. Total orders: " + totalOrders);
+    }
+}
+```
+
+### All Endpoints
+
+```
+POST /api/orders/place?userId=X&restaurantId=Y&itemName=Z&quantity=1&amount=450
+→ places new order
+→ returns: "SUCCESS: Order placed. ID: 1" or "FAILED: ..."
+
+GET /api/orders/1
+→ gets order with ID 1
+→ returns: order JSON or 404
+
+GET /api/orders/user/USER_101
+→ gets all orders for USER_101
+→ returns: list of orders as JSON
+
+GET /api/orders/status
+→ health check
+→ returns: "SwiggyX running. Total orders: X"
+```
+
+---
+
+## Testing — All Results with Logs
+
+### Test 1 — Health Check
+
+```bash
+curl http://localhost:8080/api/orders/status
+```
+
+Response:
+
+```
+SwiggyX running. Total orders: 0
+```
+
+### Test 2 — Single Order
+
+```bash
+curl -X POST "http://localhost:8080/api/orders/place?userId=USER_101&restaurantId=REST_55&itemName=Biryani&quantity=1&amount=450"
+```
+
+Response:
+
+```
+SUCCESS: Order placed. ID: 1
+```
+
+Server logs:
+
+```
+Hibernate: select count(*) from orders o1_0
+Order started for: USER_101 | Thread: pool-2-thread-1
+Fraud check started for: USER_101 on thread: pool-3-thread-1
+Inventory check for: USER_101 | Current inventory: 10 | Thread: pool-2-thread-1
+Inventory deducted for: USER_101 | Remaining: 9
+Fraud check done for: USER_101 isFraud: false
+DB connection acquired for: USER_101 | Thread: pool-2-thread-1
+Hibernate: insert into orders (created_at,item_name,quantity,restaurant_id,status,total_amount,user_id) values (?,?,?,?,?,?,?)
+Order saved to DB: 1 for: USER_101
+DB connection released for: USER_101
+Payment processing for: USER_101 | Amount: 450.0
+Payment done for: USER_101
+Notification sent for order: 1
+```
+
+What each log line proves:
+
+```
+pool-2-thread-1      → Concept 4: IO thread pool handling request
+pool-3-thread-1      → Concept 18: CPU thread pool for fraud (separate)
+Fraud + Inventory    → Concept 13: running in parallel simultaneously
+Inventory deducted   → Concept 7: mutex protected, no race condition
+DB acquired/released → Concept 8: Semaphore controlling DB access
+Payment after DB     → Concept 9: lock ordering (inventory → payment)
+Notification sent    → Concept 13: fire and forget, background
+```
+
+### Test 3 — Two Simultaneous Orders (Race Condition Test)
+
+```bash
+curl -X POST "http://localhost:8080/api/orders/place?userId=USER_102&restaurantId=REST_55&itemName=Biryani&quantity=1&amount=450" & curl -X POST "http://localhost:8080/api/orders/place?userId=USER_103&restaurantId=REST_55&itemName=Biryani&quantity=1&amount=450" &
+```
+
+Server logs:
+
+```
+Order started for: USER_103 | Thread: pool-2-thread-4
+Order started for: USER_102 | Thread: pool-2-thread-3
+Fraud check started for: USER_103 on thread: pool-3-thread-2
+Fraud check started for: USER_102 on thread: pool-3-thread-3
+Inventory check for: USER_103 | Current inventory: 9 | Thread: pool-2-thread-4
+Inventory deducted for: USER_103 | Remaining: 8
+Inventory check for: USER_102 | Current inventory: 8 | Thread: pool-2-thread-3
+Inventory deducted for: USER_102 | Remaining: 7
+```
+
+What this proves:
+
+```
+Two threads started simultaneously ✅
+Two fraud checks on CPU pool simultaneously ✅
+Inventory never accessed by two threads at same time ✅
+USER_103 checked first → saw 9 → deducted → became 8
+USER_102 checked next  → saw 8 → deducted → became 7
+Never both saw 9. Never went to -1. ReentrantLock worked. ✅
+```
+
+### Test 4 — 10 Simultaneous Orders (Scale Test)
+
+```bash
+for i in {1..10}; do curl -X POST "http://localhost:8080/api/orders/place?userId=USER_$i&restaurantId=REST_55&itemName=Biryani&quantity=1&amount=450" & done
+```
+
+Server logs:
+
+```
+Order started for: USER_2  | Thread: pool-2-thread-5
+Order started for: USER_9  | Thread: pool-2-thread-4
+Order started for: USER_10 | Thread: pool-2-thread-10
+Order started for: USER_3  | Thread: pool-2-thread-7
+Order started for: USER_4  | Thread: pool-2-thread-2
+Order started for: USER_7  | Thread: pool-2-thread-8
+Order started for: USER_6  | Thread: pool-2-thread-1
+Order started for: USER_5  | Thread: pool-2-thread-9
+Order started for: USER_8  | Thread: pool-2-thread-3
+Order started for: USER_1  | Thread: pool-2-thread-6
+
+Fraud check started for: USER_5  on thread: pool-3-thread-2
+Fraud check started for: USER_7  on thread: pool-3-thread-1
+Fraud check started for: USER_10 on thread: pool-3-thread-3
+Fraud check started for: USER_6  on thread: pool-3-thread-4
+Fraud check started for: USER_4  on thread: pool-3-thread-5
+Fraud check started for: USER_9  on thread: pool-3-thread-6
+Fraud check started for: USER_2  on thread: pool-3-thread-7
+Fraud check started for: USER_1  on thread: pool-3-thread-8
+← USER_3 and USER_8 waited — CPU pool full (8 = num of cores)
+
+Inventory check for: USER_5  | Current: 10 → Remaining: 9
+Inventory check for: USER_3  | Current: 9  → Remaining: 8
+Inventory check for: USER_8  | Current: 8  → Remaining: 7
+Inventory check for: USER_7  | Current: 7  → Remaining: 6
+Inventory check for: USER_10 | Current: 6  → Remaining: 5
+Inventory check for: USER_6  | Current: 5  → Remaining: 4
+Inventory check for: USER_4  | Current: 4  → Remaining: 3
+Inventory check for: USER_9  | Current: 3  → Remaining: 2
+Inventory check for: USER_2  | Current: 2  → Remaining: 1
+Inventory check for: USER_1  | Current: 1  → Remaining: 0
+
+Order saved to DB: 4  for: USER_2
+Order saved to DB: 5  for: USER_4
+Order saved to DB: 6  for: USER_7
+Order saved to DB: 7  for: USER_1
+Order saved to DB: 8  for: USER_10
+Order saved to DB: 9  for: USER_5
+Order saved to DB: 10 for: USER_9
+Order saved to DB: 11 for: USER_6
+Order saved to DB: 12 for: USER_8
+Order saved to DB: 13 for: USER_3
+```
+
+What this proves:
+
+```
+10 threads simultaneously              → Concept 4: Thread Pool ✅
+8 fraud checks simultaneously          → Concept 18: CPU pool = cores ✅
+USER_3, USER_8 waited for CPU pool     → Concept 4: pool limiting ✅
+Inventory: 10→9→8→7→6→5→4→3→2→1→0    → Concept 7: mutex perfect ✅
+Never negative. Never two threads same time → Concept 5: no race condition ✅
+All 10 orders saved to DB              → Concept 8: Semaphore worked ✅
+All notifications background           → Concept 13: fire and forget ✅
+```
+
+### Test 5 — Sold Out Test
+
+```bash
+curl -X POST "http://localhost:8080/api/orders/place?userId=USER_999&restaurantId=REST_55&itemName=Biryani&quantity=1&amount=450"
+```
+
+Response:
+
+```
+FAILED: Item not available
+```
+
+Server logs:
+
+```
+Order started for: USER_999 | Thread: pool-2-thread-5
+Fraud check started for: USER_999 on thread: pool-3-thread-5
+Inventory check for: USER_999 | Current inventory: 0 | Thread: pool-2-thread-5
+Insufficient inventory for: USER_999
+Fraud check done for: USER_999 isFraud: false
+```
+
+What this proves:
+
+```
+inventory = 0 correctly detected ✅
+ReentrantLock prevented any negative inventory ✅
+Fraud check ran in background (doesn't matter — already failed) ✅
+User got clear "Item not available" message ✅
+```
+
+### Complete Test Summary
+
+```
+Test 1 — Health check:        SwiggyX running ✅
+Test 2 — Single order:        SUCCESS, saved to DB ✅
+Test 3 — Two simultaneous:    Both succeeded, inventory correct ✅
+Test 4 — 10 simultaneous:     All succeeded, inventory 10→0 ✅
+Test 5 — Sold out:            FAILED: Item not available ✅
+
+Every concept from 21 lessons — working in real running code.
+```
+
+### Verify in PostgreSQL
+
+```sql
+SELECT * FROM orders;
+-- Shows all 13 orders saved correctly
+```
+
+### Note — Inventory Resets on Restart
+
+```
+inventory lives in memory: private int inventory = 10;
+Server restart → resets to 10
+Production fix → move inventory to DB table (Phase 2, Step 3)
+```
